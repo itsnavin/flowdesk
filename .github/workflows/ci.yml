@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "itsnavin-*"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x86_64
+          - os: ubuntu-22.04
+            name: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxtst-dev libxi-dev libevdev-dev libudev-dev libxkbcommon-dev libwayland-dev
+      - name: Test
+        run: cargo test --workspace --release
+      - name: Build
+        run: cargo build --release --workspace
+      - name: Loopback benchmark
+        run: cargo run --release --bin flowdesk-bench -- 500
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/flowdesk.exe, target/release/flowdesk-bench.exe, README.md, LICENSE dist/
+          Compress-Archive dist/* flowdesk-${{ matrix.name }}.zip
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir dist
+          cp target/release/flowdesk target/release/flowdesk-bench README.md LICENSE dist/
+          tar -C dist -czf flowdesk-${{ matrix.name }}.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flowdesk-${{ matrix.name }}
+          path: |
+            flowdesk-${{ matrix.name }}.zip
+            flowdesk-${{ matrix.name }}.tar.gz
+          if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            --title "Flowdesk ${{ github.ref_name }}" \
+            --notes "Early release. Only loopback/mock-device tests were run; no real two-machine, VPN or Wayland testing. See the README for limits." \
+            *
