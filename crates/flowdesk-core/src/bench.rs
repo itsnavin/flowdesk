@@ -53,6 +53,8 @@ fn wait_for(cond: impl Fn() -> bool, timeout: Duration) -> bool {
 
 /// `pings`: number of ping/pong round trips. `probes`: number of mouse-motion probes
 /// (host event -> client injector call, measured with one clock in one process).
+pub const TEST_KEY: &str = "ABCDE-FGHJK-LMNPQ-RSTUV";
+
 pub fn run_loopback(pings: usize, probes: usize) -> Result<Report> {
     let (etx, _erx) = channel();
     let host_id = Identity::generate()?;
@@ -68,12 +70,13 @@ pub fn run_loopback(pings: usize, probes: usize) -> Result<Report> {
         Arc::new(move |x, y| wl.lock().unwrap().push((x, y))),
         etx.clone(),
         HashMap::new(),
+        TEST_KEY,
     );
     let addr = host.listen("127.0.0.1:0")?;
     let x = Arc::new(AtomicI64::new(-1));
     let keys = Arc::new(Mutex::new(Vec::new()));
     let handle = start_client(
-        ClientConfig { host: addr.to_string(), name: "bench-client".into() },
+        ClientConfig { host: addr.to_string(), name: "bench-client".into(), key: TEST_KEY.into() },
         cli_id,
         Arc::new(Mutex::new(TrustStore::in_memory())),
         Arc::new(AllowAll),
@@ -122,6 +125,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wrong_key_client_never_connects() {
+        let (etx, _erx) = channel();
+        let host = Host::new("h".into(), Identity::generate().unwrap(), Arc::new(Mutex::new(TrustStore::in_memory())), Arc::new(AllowAll), (1920.0, 1080.0), Arc::new(|_, _| {}), etx.clone(), HashMap::new(), TEST_KEY);
+        let addr = host.listen("127.0.0.1:0").unwrap();
+        let h = start_client(ClientConfig { host: addr.to_string(), name: "x".into(), key: "22222-22222-22222-22222".into() }, Identity::generate().unwrap(), Arc::new(Mutex::new(TrustStore::in_memory())), Arc::new(AllowAll), Box::new(ProbeInjector { x: Arc::new(AtomicI64::new(0)), keys: Arc::new(Mutex::new(vec![])) }), etx);
+        std::thread::sleep(Duration::from_millis(1000));
+        assert!(host.peers().is_empty());
+        h.stop();
+        host.shutdown();
+    }
+
+    #[test]
     fn loopback_end_to_end() {
         let r = run_loopback(50, 200).unwrap();
         println!(
@@ -148,10 +163,11 @@ mod tests {
             Arc::new(|_, _| {}),
             etx.clone(),
             HashMap::new(),
+            TEST_KEY,
         );
         let addr = host.listen("127.0.0.1:0").unwrap();
         let h = start_client(
-            ClientConfig { host: addr.to_string(), name: "evil".into() },
+            ClientConfig { host: addr.to_string(), name: "evil".into(), key: TEST_KEY.into() },
             Identity::generate().unwrap(),
             Arc::new(Mutex::new(TrustStore::in_memory())),
             Arc::new(AllowAll),
@@ -179,10 +195,11 @@ mod tests {
             Arc::new(|_, _| {}),
             etx.clone(),
             HashMap::new(),
+            TEST_KEY,
         );
         let addr = host.listen("127.0.0.1:0").unwrap();
         let h = start_client(
-            ClientConfig { host: addr.to_string(), name: "c".into() },
+            ClientConfig { host: addr.to_string(), name: "c".into(), key: TEST_KEY.into() },
             Identity::generate().unwrap(),
             Arc::new(Mutex::new(TrustStore::in_memory())),
             Arc::new(AllowAll),

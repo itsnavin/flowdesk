@@ -67,6 +67,7 @@ struct State {
 pub struct Host {
     name: String,
     id: Identity,
+    psk: [u8; 32],
     trust: Arc<Mutex<TrustStore>>,
     verifier: Arc<dyn Verifier>,
     screen: (f64, f64),
@@ -89,11 +90,14 @@ impl Host {
         warp: Warp,
         events: Sender<Event>,
         layout: HashMap<String, Side>,
-    ) -> Arc<Host> {
+            key: &str,
+        ) -> Arc<Host> {
+            let psk = crate::identity::psk_from_key(key).expect("valid security key");
         let (tx, rx) = channel();
         let host = Arc::new(Host {
             name,
             id,
+            psk,
             trust,
             verifier,
             screen,
@@ -233,7 +237,7 @@ impl Host {
             }
         }
         let mut guard = Guard(&self.pending_conns, false);
-        let mut est = handshake(stream, &self.id, false, IDLE_TIMEOUT)?;
+        let mut est = handshake(stream, &self.id, false, IDLE_TIMEOUT, &self.psk)?;
         let fp = est.peer_fingerprint.clone();
         if !check_peer(&self.trust, &self.verifier, &fp, &addr.to_string()) {
             est.writer.shutdown();

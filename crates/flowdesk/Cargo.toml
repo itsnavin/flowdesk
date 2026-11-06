@@ -12,6 +12,21 @@ path = "src/main.rs"
 name = "flowdesk-bench"
 path = "src/bin/flowdesk-bench.rs"
 
+[package.metadata.deb]
+name = "flowdesk"
+maintainer = "itsnavin <noreply@github.com>"
+copyright = "MIT"
+license-file = ["../../LICENSE", "0"]
+extended-description = "Share one keyboard and mouse between Windows and Linux computers over LAN or VPN, with an encrypted, key-protected connection."
+section = "utils"
+priority = "optional"
+depends = "$auto, libx11-6, libxtst6, libxi6"
+assets = [
+    ["../../target/release/flowdesk", "usr/bin/", "755"],
+    ["../../packaging/flowdesk.desktop", "usr/share/applications/", "644"],
+    ["../../README.md", "usr/share/doc/flowdesk/README.md", "644"],
+]
+
 [dependencies]
 anyhow = "1"
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
