@@ -42,7 +42,7 @@ Automated (`cargo test --workspace`, run on Windows locally and on Windows + Ubu
 - Client state machine (virtual cursor, edge hand-back, stuck-key release) with a mock injector.
 - Integration over 127.0.0.1 with real sockets/encryption and mock devices: connect, pairing refusal, edge hand-over, hotkey returning control, input delivery.
 
-Loopback latency (`flowdesk-bench`, Windows, release build, one run on a development PC, noisy because of OS scheduling): ping round trip p50 ≈ 0.9 ms (p95 ≈ 4 ms); host event → client injector call p50 ≈ 0.4 ms (p95 ≈ 1.9 ms). This measures **only the software path on one machine**. It says nothing about your network, VPN, or the OS input stack; real latency is dominated by the link RTT, which the Diagnostics page shows you.
+Loopback latency (`flowdesk-bench`, Windows, release build, one run on a development PC, noisy because of OS scheduling): ping round trip p50 ≈ 0.9 ms (p95 ≈ 4 ms); host event → client injector call p50 ≈ 0.4 ms (p95 ≈ 1.9 ms). This measures **only the software path on one machine**. On GitHub-hosted CI runners (500 probes): Linux ping p50 ≈ 23 µs, host event → client injector p50 ≈ 16 µs, p99 ≈ 25 µs; Windows ping p50 ≈ 81 µs, event → injector p50 ≈ 45 µs, p99 ≈ 105 µs. It says nothing about your network, VPN, or the OS input stack; real latency is dominated by the link RTT, which the Diagnostics page shows you.
 
 Also: the Windows GUI was launched and stayed running (no screenshot-based UI review). **Not tested:** two physical machines, real VPNs, real key/mouse injection and capture end-to-end, Linux GUI/capture/injection at runtime (builds in CI only), Wayland, high-DPI/multi-monitor, Windows UAC cases.
 
