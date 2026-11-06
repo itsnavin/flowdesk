@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Flowdesk
+Comment=Share one keyboard and mouse between computers
+Exec=flowdesk
+Terminal=false
+Categories=Utility;Network;

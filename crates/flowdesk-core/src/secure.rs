@@ -11,7 +11,7 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
+const NOISE_PARAMS: &str = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s";
 const MAX_FRAME: usize = 4096;
 
 pub struct SecureReader {
@@ -57,18 +57,21 @@ fn read_frame(s: &mut TcpStream) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Run the handshake on `stream`. `idle_timeout` bounds every later read (keepalive).
+/// Run the handshake on `stream`. `psk` is derived from the shared security key
+/// (see `identity::psk_from_key`): a wrong key makes the handshake fail before any
+/// application data flows. `idle_timeout` bounds every later read (keepalive).
 pub fn handshake(
     mut stream: TcpStream,
     id: &Identity,
     initiator: bool,
     idle_timeout: Duration,
+    psk: &[u8; 32],
 ) -> Result<Established> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let params = NOISE_PARAMS.parse()?;
-    let builder = snow::Builder::new(params).local_private_key(&id.private);
+    let builder = snow::Builder::new(params).local_private_key(&id.private).psk(3, psk);
     let mut hs = if initiator { builder.build_initiator()? } else { builder.build_responder()? };
     let mut buf = vec![0u8; 1024];
     let mut my_turn = initiator;
@@ -123,6 +126,26 @@ mod tests {
     use super::*;
     use crate::proto::InputEv;
     use std::net::TcpListener;
+
+    fn handshake(s: TcpStream, id: &Identity, init: bool, t: Duration) -> Result<Established> {
+        super::handshake(s, id, init, t, &[7u8; 32])
+    }
+
+    #[test]
+    fn wrong_security_key_fails_handshake() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let b = Identity::generate().unwrap();
+        let t = std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            super::handshake(s, &b, false, Duration::from_secs(5), &[1u8; 32]).is_err()
+        });
+        let a = Identity::generate().unwrap();
+        let c = super::handshake(TcpStream::connect(addr).unwrap(), &a, true, Duration::from_secs(5), &[2u8; 32]);
+        let server_failed = t.join().unwrap();
+        assert!(server_failed, "server must reject a client with a different key");
+        drop(c);
+    }
 
     fn pair() -> (Established, Established) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();

@@ -7,14 +7,15 @@ Share one keyboard and mouse between Windows and Linux computers — an open-sou
 ## How it works
 
 - **Host** (the PC with the physical keyboard/mouse) listens on a TCP port. **Clients** connect to it by `host:port` — type the LAN or VPN (Tailscale / WireGuard / OpenVPN) address. There is no broadcast discovery and no network scanning, so routed/VPN networks work the same as LAN.
-- Push the pointer into the screen edge where you placed a client (Screen layout page) and the host swallows local input and streams it to that client; push back through the entry edge to return. **Ctrl+Alt+Pause** or the *Return control* button always returns control immediately, and a dropped connection returns control automatically.
+- Push the pointer into the screen edge where you placed a client (Layout tab) and the host swallows local input and streams it to that client; push back through the entry edge to return. **Ctrl+Alt+Pause** or the *Return control* button always returns control immediately, and a dropped connection returns control automatically.
 - Mouse motion is sent as relative deltas. If the network is slow, queued motion is merged (coalesced) before sending, so delay never accumulates into "rubber-band" lag. Messages are tiny (a mouse move is ~6 bytes before encryption), TCP_NODELAY is on, and each side sends keep-alives (0.5 s) with a 6 s dead-peer timeout and automatic reconnect with back-off.
 - **Diagnostics** page: live round-trip time of the encrypted keep-alive pings (last / median / 95th / 99th / max + graph) per client.
 
 ### Security
 
-- Noise `XX_25519_ChaChaPoly_BLAKE2s` handshake (via the `snow` crate): mutual authentication with long-term keys and forward-secret session keys; all traffic is encrypted and integrity-protected.
-- **Pairing**: the first time an unknown computer connects, *both* sides show its key fingerprint (e.g. `ab12-cd34-…`) and require you to confirm they match. Trusted fingerprints are stored in `trusted.json` (config dir) and can be revoked in the Security page. Unverified peers can never send or receive input.
+- Noise `XXpsk3_25519_ChaChaPoly_BLAKE2s` handshake (via the `snow` crate): mutual authentication with long-term keys and forward-secret session keys; all traffic is encrypted and integrity-protected.
+- **Security key (new in 0.2)**: the *Server* tab generates a random 100-bit key (e.g. `ABCDE-FGHJK-LMNPQ-RSTUV`, regenerate while stopped). Clients must enter the same key on the *Client* tab. It is mixed into the handshake as a Noise pre-shared key (`Noise_XXpsk3`), so a client with the wrong key fails the handshake and nothing is accepted. The key is stored in plain text in `settings.json` in your user config dir - protect that file like a password.
+- **Pairing**: after the key check, the first time an unknown computer connects, *both* sides show its key fingerprint (e.g. `ab12-cd34-…`) and require you to confirm they match. Trusted fingerprints are stored in `trusted.json` (config dir) and can be revoked in the Security page. Unverified peers can never send or receive input.
 - No telemetry, no update checks, no outbound connections except the one you configure. Identity key is stored in your user config dir (`identity.key`, mode 0600 on Linux).
 - Host side limits concurrent not-yet-authenticated connections. Not audited — treat as unreviewed software and keep the port on a VPN/trusted network.
 
@@ -30,13 +31,14 @@ cargo run --release --bin flowdesk-bench -- 1000   # loopback latency measuremen
 
 Linux build deps: `libx11-dev libxtst-dev libxi-dev libevdev-dev libudev-dev libxkbcommon-dev libwayland-dev pkg-config`. Linux *host* capture needs read/write access to `/dev/input` (add your user to the `input` group) and an X11 session.
 
-Quick start: on the host choose *This PC shares…* → *Start sharing*; on the client choose *receives input…* → enter `host-ip:24880` → *Connect*; verify the fingerprint on both screens; place the client on the Screen layout page. Open TCP 24880 in the host firewall.
+Quick start: on the host choose *This PC shares…* → *Start sharing*; on the client choose *receives input…* → enter `host-ip:24880` → *Connect*; verify the fingerprint on both screens; place the client on the Layout tab. Open TCP 24880 in the host firewall.
 
 ## What was tested
 
 Automated (`cargo test --workspace`, run on Windows locally and on Windows + Ubuntu in CI):
 
 - Protocol encode/decode, motion coalescing, malformed input.
+- Security key generation/normalisation; a client with the wrong key is rejected at the handshake and never connects (unit + integration).
 - Noise handshake + encrypted framing over real localhost sockets; tampered frames rejected.
 - Identity persistence, fingerprints, trust store.
 - Client state machine (virtual cursor, edge hand-back, stuck-key release) with a mock injector.

@@ -135,6 +135,8 @@ pub struct ClientConfig {
     /// `host:port` — hostname or IP (works across VPNs; no discovery involved).
     pub host: String,
     pub name: String,
+    /// Security key shown on the host's Server tab; required before the handshake.
+    pub key: String,
 }
 
 #[derive(Clone)]
@@ -240,8 +242,12 @@ fn session(
     handle: &ClientHandle,
     events: &Sender<Event>,
 ) -> Result<bool> {
+    let Some(psk) = crate::identity::psk_from_key(&cfg.key) else {
+        bail!("invalid security key (expected 20 letters/digits, e.g. ABCDE-FGHJK-LMNPQ-RSTUV)");
+    };
     let stream = connect(&cfg.host)?;
-    let mut est = handshake(stream, id, true, Duration::from_secs(6))?;
+    let mut est = handshake(stream, id, true, Duration::from_secs(6), &psk)
+        .map_err(|e| anyhow::anyhow!("handshake failed (wrong security key or not a Flowdesk host): {e}"))?;
     if !crate::host::check_peer(trust, verifier, &est.peer_fingerprint, &cfg.host) {
         let _ = events.send(Event::Log(format!("Host {} rejected (untrusted)", est.peer_fingerprint)));
         est.writer.shutdown();

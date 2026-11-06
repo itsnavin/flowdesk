@@ -45,18 +45,25 @@ jobs:
           New-Item -ItemType Directory dist | Out-Null
           Copy-Item target/release/flowdesk.exe, target/release/flowdesk-bench.exe, README.md, LICENSE dist/
           Compress-Archive dist/* flowdesk-${{ matrix.name }}.zip
+          Copy-Item target/release/flowdesk.exe flowdesk-${{ matrix.name }}.exe
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
           mkdir dist
           cp target/release/flowdesk target/release/flowdesk-bench README.md LICENSE dist/
           tar -C dist -czf flowdesk-${{ matrix.name }}.tar.gz .
+          cargo install cargo-deb --locked
+          cargo deb -p flowdesk --no-build --output flowdesk-${{ matrix.name }}.deb
+          dpkg-deb --info flowdesk-${{ matrix.name }}.deb
+          dpkg-deb --contents flowdesk-${{ matrix.name }}.deb
       - uses: actions/upload-artifact@v4
         with:
           name: flowdesk-${{ matrix.name }}
           path: |
             flowdesk-${{ matrix.name }}.zip
+            flowdesk-${{ matrix.name }}.exe
             flowdesk-${{ matrix.name }}.tar.gz
+            flowdesk-${{ matrix.name }}.deb
           if-no-files-found: ignore
 
   release:
@@ -76,5 +83,5 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" \
             --title "Flowdesk ${{ github.ref_name }}" \
-            --notes "Early release. Only loopback/mock-device tests were run; no real two-machine, VPN or Wayland testing. See the README for limits." \
+            --notes "Windows .exe/.zip and Linux .deb/.tar.gz. Server tab generates a security key that clients must enter. Only loopback/mock-device tests were run; no real two-machine, VPN or Wayland testing. See the README for limits." \
             *

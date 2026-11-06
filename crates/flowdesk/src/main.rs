@@ -26,6 +26,10 @@ struct Settings {
     name: String,
     listen: String,
     connect_to: String,
+    #[serde(default)]
+    server_key: String,
+    #[serde(default)]
+    client_key: String,
     layout: HashMap<String, Side>,
 }
 
@@ -37,6 +41,8 @@ impl Default for Settings {
                 .unwrap_or_else(|_| "my-computer".into()),
             listen: "0.0.0.0:24880".into(),
             connect_to: String::new(),
+            server_key: String::new(),
+            client_key: String::new(),
             layout: HashMap::new(),
         }
     }
@@ -92,22 +98,16 @@ impl Verifier for GuiVerifier {
 
 #[derive(PartialEq, Clone, Copy)]
 enum Page {
-    Connect,
+    Server,
+    Client,
     Layout,
     Diagnostics,
     Security,
     About,
 }
 
-#[derive(PartialEq, Clone, Copy)]
-enum Mode {
-    Host,
-    Client,
-}
-
 struct App {
     page: Page,
-    mode: Mode,
     settings: Settings,
     identity: Identity,
     trust: Arc<Mutex<TrustStore>>,
@@ -146,10 +146,13 @@ impl App {
         let trust = Arc::new(Mutex::new(TrustStore::load(&dir)));
         let pending = Arc::new(Mutex::new(Vec::new()));
         let (events_tx, events_rx) = channel();
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        if flowdesk_core::identity::normalize_key(&settings.server_key).is_none() {
+            settings.server_key = flowdesk_core::identity::generate_key().expect("rng");
+            settings.save();
+        }
         App {
-            page: Page::Connect,
-            mode: Mode::Host,
+            page: Page::Server,
             verifier: Arc::new(GuiVerifier { pending: pending.clone(), ctx: cc.egui_ctx.clone() }),
             pending,
             settings,
@@ -178,7 +181,7 @@ impl App {
                     self.push_log(format!("Connected: {name}"));
                 }
                 Event::PeerDisconnected { name } => {
-                    if self.mode == Mode::Client {
+                    if self.client.is_some() {
                         self.connected_to = None;
                     }
                     self.push_log(format!("Disconnected: {name}"));
@@ -207,6 +210,7 @@ impl App {
             native::native_warp(),
             self.events_tx.clone(),
             self.settings.layout.clone(),
+            &self.settings.server_key,
         );
         match host.listen(&self.settings.listen) {
             Ok(_) => {
@@ -241,7 +245,7 @@ impl App {
 
     fn start_client(&mut self) {
         let h = start_client(
-            ClientConfig { host: self.settings.connect_to.clone(), name: self.settings.name.clone() },
+            ClientConfig { host: self.settings.connect_to.clone(), name: self.settings.name.clone(), key: self.settings.client_key.clone() },
             self.identity.clone(),
             self.trust.clone(),
             self.verifier.clone(),
@@ -347,41 +351,48 @@ impl eframe::App for App {
             }
         }
 
-        egui::SidePanel::left("nav").exact_width(190.0).show(ctx, |ui| {
-            ui.add_space(8.0);
-            ui.label(RichText::new("Flowdesk").size(26.0).strong().color(ACCENT));
-            ui.label(RichText::new("one keyboard, many PCs").color(MUTED));
-            ui.add_space(14.0);
-            for (p, label) in [
-                (Page::Connect, "Connect"),
-                (Page::Layout, "Screen layout"),
-                (Page::Diagnostics, "Diagnostics"),
-                (Page::Security, "Security"),
-                (Page::About, "About & limits"),
-            ] {
-                if ui
-                    .add_sized([170.0, 34.0], egui::SelectableLabel::new(self.page == p, RichText::new(label).size(15.0)))
-                    .clicked()
-                {
-                    self.page = p;
+        egui::TopBottomPanel::top("tabs").frame(egui::Frame::new().fill(CARD).inner_margin(egui::Margin::symmetric(14, 8))).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Flowdesk").size(20.0).strong().color(ACCENT));
+                ui.add_space(12.0);
+                for (p, label) in [
+                    (Page::Server, "Server"),
+                    (Page::Client, "Client"),
+                    (Page::Layout, "Layout"),
+                    (Page::Diagnostics, "Diagnostics"),
+                    (Page::Security, "Security"),
+                    (Page::About, "About"),
+                ] {
+                    if ui.selectable_label(self.page == p, RichText::new(label).size(15.0)).clicked() {
+                        self.page = p;
+                    }
                 }
-            }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                ui.add_space(8.0);
-                if self.host.as_ref().map(|h| h.is_remote()).unwrap_or(false)
-                    && big_button(ui, "Return control", BAD).clicked()
-                {
+            });
+        });
+        egui::TopBottomPanel::bottom("status").frame(egui::Frame::new().fill(CARD).inner_margin(egui::Margin::symmetric(14, 6))).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let (txt, col) = if let Some(c) = &self.controlling {
+                    (format!("Controlling: {c}"), ACCENT)
+                } else if self.connected_to.is_some() || self.host.as_ref().map(|h| !h.peers().is_empty()).unwrap_or(false) {
+                    ("Connected".to_string(), GOOD)
+                } else if self.running() {
+                    (self.status.clone(), WARN)
+                } else {
+                    ("Stopped".to_string(), MUTED)
+                };
+                pill(ui, &txt, col);
+                ui.label(RichText::new("Panic key: Ctrl+Alt+Pause").color(MUTED).small());
+                if self.host.as_ref().map(|h| h.is_remote()).unwrap_or(false) && ui.button("Return control").clicked() {
                     if let Some(h) = &self.host {
                         h.return_control();
                     }
                 }
-                ui.label(RichText::new("Panic key: Ctrl+Alt+Pause").color(MUTED).small());
             });
         });
-
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::same(20))).show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| match self.page {
-                Page::Connect => self.page_connect(ui),
+                Page::Server => self.page_server(ui),
+                Page::Client => self.page_client(ui),
                 Page::Layout => self.page_layout(ui),
                 Page::Diagnostics => self.page_diag(ui),
                 Page::Security => self.page_security(ui),
@@ -392,79 +403,116 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn page_connect(&mut self, ui: &mut egui::Ui) {
-        heading(ui, "Connect");
+    fn page_server(&mut self, ui: &mut egui::Ui) {
+        heading(ui, "Server — share this PC's keyboard & mouse");
+        let busy = self.client.is_some();
         card(ui, |ui| {
+            ui.label(RichText::new("Security key").strong());
+            ui.label(RichText::new("Clients must enter this key before they can even start the handshake.").color(MUTED));
             ui.horizontal(|ui| {
-                ui.label("This computer's name");
-                ui.add_enabled(!self.running(), egui::TextEdit::singleline(&mut self.settings.name).desired_width(220.0));
-                ui.separator();
-                let (txt, col) = if self.controlling.is_some() {
-                    (format!("Controlling: {}", self.controlling.clone().unwrap()), ACCENT)
-                } else if self.connected_to.is_some() || self.host.as_ref().map(|h| !h.peers().is_empty()).unwrap_or(false) {
-                    ("Connected".to_string(), GOOD)
-                } else if self.running() {
-                    (self.status.clone(), WARN)
-                } else {
-                    ("Stopped".to_string(), MUTED)
-                };
-                pill(ui, &txt, col);
-            });
-        });
-        card(ui, |ui| {
-            ui.add_enabled_ui(!self.running(), |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.mode, Mode::Host, RichText::new("This PC shares its keyboard & mouse").size(15.0));
-                    ui.selectable_value(&mut self.mode, Mode::Client, RichText::new("This PC receives input from another PC").size(15.0));
-                });
-            });
-            ui.separator();
-            match self.mode {
-                Mode::Host => {
-                    ui.label("Listen address (works over LAN and VPN — use the VPN interface IP or 0.0.0.0):");
-                    ui.add_enabled(!self.running(), egui::TextEdit::singleline(&mut self.settings.listen).desired_width(260.0));
-                    ui.label(RichText::new("Open this TCP port in the firewall of the host. Nothing is broadcast or scanned.").color(MUTED));
-                    if self.host.is_none() {
-                        if big_button(ui, "Start sharing", ACCENT).clicked() {
-                            self.settings.save();
-                            self.start_host();
-                        }
-                    } else if big_button(ui, "Stop sharing", BAD).clicked() {
-                        self.stop_host();
-                    }
-                    if let Some(h) = &self.host {
-                        ui.add_space(6.0);
-                        ui.label(RichText::new("Connected computers").strong());
-                        let peers = h.peers();
-                        if peers.is_empty() {
-                            ui.label(RichText::new("Waiting for clients to connect…").color(MUTED));
-                        }
-                        for p in peers {
-                            ui.horizontal(|ui| {
-                                pill(ui, "online", GOOD);
-                                ui.label(format!("{} — {} — RTT {}", p.name, side_name(p.side), us(p.rtt.last_us)));
-                            });
-                        }
+                ui.label(RichText::new(&self.settings.server_key).monospace().size(26.0).strong().color(ACCENT));
+                if ui.button("Copy").clicked() {
+                    ui.ctx().copy_text(self.settings.server_key.clone());
+                }
+                if ui.add_enabled(self.host.is_none(), egui::Button::new("Generate new key")).clicked() {
+                    if let Ok(k) = flowdesk_core::identity::generate_key() {
+                        self.settings.server_key = k;
+                        self.settings.save();
                     }
                 }
-                Mode::Client => {
-                    ui.label("Host address (IP or hostname : port — a VPN/Tailscale/WireGuard IP works):");
-                    ui.add_enabled(
-                        !self.running(),
-                        egui::TextEdit::singleline(&mut self.settings.connect_to).hint_text("100.64.0.10:24880").desired_width(260.0),
-                    );
-                    if self.client.is_none() {
-                        if big_button(ui, "Connect", ACCENT).clicked() && !self.settings.connect_to.trim().is_empty() {
-                            self.settings.save();
-                            self.start_client();
-                        }
-                    } else if big_button(ui, "Disconnect", BAD).clicked() {
-                        self.stop_client();
+            });
+            if self.host.is_some() {
+                ui.label(RichText::new("Stop the server to generate a new key.").color(MUTED).small());
+            }
+        });
+        card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Computer name");
+                ui.add_enabled(self.host.is_none(), egui::TextEdit::singleline(&mut self.settings.name).desired_width(200.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Listen address");
+                ui.add_enabled(self.host.is_none(), egui::TextEdit::singleline(&mut self.settings.listen).desired_width(200.0));
+            });
+            ui.label(RichText::new("Use 0.0.0.0:24880 or your VPN interface IP. Open the TCP port in the firewall. Nothing is broadcast or scanned.").color(MUTED).small());
+            if self.host.is_none() {
+                ui.add_enabled_ui(!busy, |ui| {
+                    if big_button(ui, "Start server", ACCENT).clicked() {
+                        self.settings.save();
+                        self.start_host();
                     }
-                    ui.label(RichText::new("Reconnects automatically with back-off if the link drops.").color(MUTED));
+                });
+                if busy {
+                    ui.label(RichText::new("Disconnect the client first.").color(MUTED).small());
+                }
+            } else if big_button(ui, "Stop server", BAD).clicked() {
+                self.stop_host();
+            }
+            if let Some(h) = &self.host {
+                ui.separator();
+                ui.label(RichText::new("Connected computers").strong());
+                let peers = h.peers();
+                if peers.is_empty() {
+                    ui.label(RichText::new("Waiting for clients…").color(MUTED));
+                }
+                for p in peers {
+                    ui.horizontal(|ui| {
+                        pill(ui, "online", GOOD);
+                        ui.label(format!("{} — {} — RTT {}", p.name, side_name(p.side), us(p.rtt.last_us)));
+                    });
                 }
             }
         });
+        self.activity(ui);
+    }
+
+    fn page_client(&mut self, ui: &mut egui::Ui) {
+        heading(ui, "Client — receive input from another PC");
+        let busy = self.host.is_some();
+        let key_ok = flowdesk_core::identity::normalize_key(&self.settings.client_key).is_some();
+        card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Computer name");
+                ui.add_enabled(self.client.is_none(), egui::TextEdit::singleline(&mut self.settings.name).desired_width(200.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Server address");
+                ui.add_enabled(
+                    self.client.is_none(),
+                    egui::TextEdit::singleline(&mut self.settings.connect_to).hint_text("100.64.0.10:24880").desired_width(200.0),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Security key");
+                ui.add_enabled(
+                    self.client.is_none(),
+                    egui::TextEdit::singleline(&mut self.settings.client_key).hint_text("ABCDE-FGHJK-LMNPQ-RSTUV").desired_width(240.0).font(egui::TextStyle::Monospace),
+                );
+                if !self.settings.client_key.is_empty() && !key_ok {
+                    ui.colored_label(BAD, "needs 20 letters/digits");
+                }
+            });
+            ui.label(RichText::new("Copy the key from the Server tab of the other PC. Wrong key = the connection is refused before any input is accepted. A VPN/Tailscale/WireGuard IP works.").color(MUTED).small());
+            if self.client.is_none() {
+                let can = key_ok && !self.settings.connect_to.trim().is_empty() && !busy;
+                ui.add_enabled_ui(can, |ui| {
+                    if big_button(ui, "Connect", ACCENT).clicked() {
+                        self.settings.save();
+                        self.start_client();
+                    }
+                });
+                if busy {
+                    ui.label(RichText::new("Stop the server first.").color(MUTED).small());
+                }
+            } else if big_button(ui, "Disconnect", BAD).clicked() {
+                self.stop_client();
+            }
+            ui.label(RichText::new("Reconnects automatically with back-off if the link drops.").color(MUTED).small());
+        });
+        self.activity(ui);
+    }
+
+    fn activity(&mut self, ui: &mut egui::Ui) {
         if let Some(e) = &self.capture_error {
             ui.colored_label(BAD, e);
         }
@@ -477,11 +525,10 @@ impl App {
             });
         });
     }
-
     fn page_layout(&mut self, ui: &mut egui::Ui) {
         heading(ui, "Screen layout");
         let Some(host) = self.host.clone() else {
-            ui.label(RichText::new("Start sharing on the Connect page to arrange connected computers.").color(MUTED));
+            ui.label(RichText::new("Start the server on the Server tab to arrange connected computers.").color(MUTED));
             return;
         };
         let peers = host.peers();
@@ -551,8 +598,8 @@ impl App {
         let peers: Vec<PeerInfo> = self.host.as_ref().map(|h| h.peers()).unwrap_or_default();
         if peers.is_empty() {
             card(ui, |ui| {
-                ui.label(if self.mode == Mode::Client {
-                    "Latency graphs are shown on the host. A client logs connection events on the Connect page."
+                ui.label(if self.client.is_some() {
+                    "Latency graphs are shown on the server. A client logs connection events on the Client tab."
                 } else {
                     "No connected computers."
                 });

@@ -29,6 +29,27 @@ pub fn fingerprint(public: &[u8]) -> String {
     h[..24].as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("-")
 }
 
+const KEY_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/// New random security key: 20 symbols (100 bits), shown as `ABCDE-FGHJK-LMNPQ-RSTUV`.
+pub fn generate_key() -> Result<String> {
+    let kp = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse()?).generate_keypair()?;
+    let chars: Vec<char> = kp.private[8..28].iter().map(|b| KEY_ALPHABET[(*b & 31) as usize] as char).collect();
+    Ok(chars.chunks(5).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("-"))
+}
+
+/// Canonical form (upper case, no separators) or `None` if it isn't a valid key.
+pub fn normalize_key(s: &str) -> Option<String> {
+    let n: String = s.chars().filter(|c| !c.is_whitespace() && *c != '-').collect::<String>().to_uppercase();
+    (n.len() == 20 && n.bytes().all(|b| KEY_ALPHABET.contains(&b))).then_some(n)
+}
+
+/// Pre-shared key for the Noise handshake, derived from the security key.
+pub fn psk_from_key(s: &str) -> Option<[u8; 32]> {
+    let n = normalize_key(s)?;
+    Some(Sha256::digest(format!("flowdesk-psk-v1:{n}").as_bytes()).into())
+}
+
 impl Identity {
     pub fn generate() -> Result<Self> {
         let kp = snow::Builder::new("Noise_XX_25519_ChaChaPoly_BLAKE2s".parse()?).generate_keypair()?;
@@ -113,6 +134,16 @@ impl TrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_key_format_and_normalisation() {
+        let k = generate_key().unwrap();
+        assert_eq!(k.len(), 23);
+        assert_ne!(k, generate_key().unwrap());
+        assert_eq!(psk_from_key(&k), psk_from_key(&k.to_lowercase().replace('-', " ")));
+        assert!(psk_from_key("short").is_none());
+        assert_ne!(psk_from_key(&k), psk_from_key(&generate_key().unwrap()));
+    }
 
     #[test]
     fn fingerprint_format_and_stability() {
